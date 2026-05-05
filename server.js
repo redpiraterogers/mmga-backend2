@@ -7,66 +7,32 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Try multiple Polygon RPCs (free public endpoints)
-const RPC_URLS = [
-  'https://polygon-rpc.com',
-  'https://rpc-mainnet.maticvigil.com',
-  'https://rpc-mainnet.matic.network',
-  'https://matic-mainnet.chainstacklabs.com',
-  'https://polygon-mainnet.public.blastapi.io'
+// Use Alchemy RPC (from environment variable)
+const RPC_URL = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
+console.log('🔄 Connecting to RPC:', RPC_URL.substring(0, 50) + '...');
+
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider);
+
+console.log('🔑 Backend wallet:', wallet.address);
+
+const contractABI = [
+  "function mint(address to, uint256 amount) public",
+  "function mintTo(address to, uint256 amount) public",
+  "function balanceOf(address account) public view returns (uint256)",
+  "function decimals() public view returns (uint8)"
 ];
 
-let provider;
-let wallet;
-let contract;
-
-async function initProvider() {
-  for (const rpcUrl of RPC_URLS) {
-    try {
-      console.log(`🔄 Trying RPC: ${rpcUrl}`);
-      const testProvider = new ethers.JsonRpcProvider(rpcUrl);
-      await testProvider.getNetwork(); // Test connection
-      provider = testProvider;
-      console.log(`✅ Connected to: ${rpcUrl}`);
-      break;
-    } catch (e) {
-      console.log(`❌ Failed: ${rpcUrl}`);
-    }
-  }
-  
-  if (!provider) {
-    console.error('❌ All RPC endpoints failed!');
-    process.exit(1);
-  }
-  
-  // Initialize wallet and contract
-  wallet = new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider);
-  console.log('🔑 Backend wallet:', wallet.address);
-  
-  const contractABI = [
-    "function mint(address to, uint256 amount) public",
-    "function mintTo(address to, uint256 amount) public",
-    "function balanceOf(address account) public view returns (uint256)",
-    "function decimals() public view returns (uint8)"
-  ];
-  
-  contract = new ethers.Contract(
-    process.env.TOKEN_CONTRACT_ADDRESS,
-    contractABI,
-    wallet
-  );
-}
-
-initProvider();
+const contract = new ethers.Contract(
+  process.env.TOKEN_CONTRACT_ADDRESS,
+  contractABI,
+  wallet
+);
 
 const mintHistory = new Map();
 const MAX_MINTS_PER_HOUR = 60;
 
 app.post('/api/mint-monk', async (req, res) => {
-  if (!contract) {
-    return res.status(503).json({ error: 'Backend initializing, try again in a moment' });
-  }
-
   const { walletAddress, amount, sessionData } = req.body;
   
   if (!walletAddress || !amount || !sessionData) {
@@ -138,10 +104,6 @@ app.post('/api/mint-monk', async (req, res) => {
 });
 
 app.get('/api/balance/:walletAddress', async (req, res) => {
-  if (!contract) {
-    return res.status(503).json({ error: 'Backend initializing' });
-  }
-
   const { walletAddress } = req.params;
   
   try {
@@ -171,17 +133,18 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     contract: process.env.TOKEN_CONTRACT_ADDRESS,
     network: 'polygon',
-    backendWallet: wallet ? wallet.address : 'initializing'
+    backendWallet: wallet.address
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('\n' + '='.repeat(60));
-  console.log('🚀 MMGA BACKEND RUNNING (ETHERS.JS)');
+  console.log('🚀 MMGA BACKEND RUNNING (ALCHEMY RPC)');
   console.log('='.repeat(60));
   console.log(`📡 Port: ${PORT}`);
   console.log(`⛓️  Network: Polygon`);
   console.log(`💰 Contract: ${process.env.TOKEN_CONTRACT_ADDRESS}`);
-  console.log(`✅ Server started!\n`);
+  console.log(`🔑 Wallet: ${wallet.address}`);
+  console.log(`✅ Ready to mint!\n`);
 });
