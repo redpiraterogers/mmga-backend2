@@ -1,26 +1,24 @@
 {
   "name": "mmga-backend",
   "version": "1.0.0",
-  "description": "MMGA Meditation Platform - Backend API for minting $MONK tokens on Polygon",
+  "description": "MMGA Meditation Platform Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
   "keywords": [
     "mmga",
     "meditation",
     "blockchain",
-    "polygon",
-    "thirdweb"
+    "polygon"
   ],
   "author": "MMGA Team",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "@thirdweb-dev/sdk": "^4.0.0"
+    "express": "4.18.2",
+    "cors": "2.8.5",
+    "dotenv": "16.0.0",
+    "@thirdweb-dev/sdk": "4.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
