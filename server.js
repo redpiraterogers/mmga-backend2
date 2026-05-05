@@ -1,55 +1,42 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { ThirdwebSDK } = require('@thirdweb-dev/sdk');
+const { ethers } = require('ethers');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-console.log('🔑 Initializing SDK with private key...');
+// Polygon RPC
+const provider = new ethers.JsonRpcProvider('https://polygon-rpc.com');
 
-const sdk = ThirdwebSDK.fromPrivateKey(
-  process.env.BACKEND_PRIVATE_KEY,
-  'polygon'
+// Your backend wallet
+const wallet = new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider);
+
+console.log('🔑 Backend wallet:', wallet.address);
+
+// Simple ERC20 mint ABI
+const contractABI = [
+  "function mint(address to, uint256 amount) public",
+  "function mintTo(address to, uint256 amount) public",
+  "function balanceOf(address account) public view returns (uint256)",
+  "function decimals() public view returns (uint8)"
+];
+
+const contract = new ethers.Contract(
+  process.env.TOKEN_CONTRACT_ADDRESS,
+  contractABI,
+  wallet
 );
-
-let tokenContract;
-let contractReady = false;
-
-async function initContract() {
-  try {
-    console.log('🔄 Loading contract:', process.env.TOKEN_CONTRACT_ADDRESS);
-    tokenContract = await sdk.getContract(process.env.TOKEN_CONTRACT_ADDRESS);
-    contractReady = true;
-    console.log('✅ Contract ready:', process.env.TOKEN_CONTRACT_ADDRESS);
-  } catch (error) {
-    console.error('❌ Failed to load contract:', error.message);
-    console.error('Full error:', error);
-  }
-}
-
-initContract();
 
 const mintHistory = new Map();
 const MAX_MINTS_PER_HOUR = 60;
 
 app.post('/api/mint-monk', async (req, res) => {
-  // Check if contract is ready
-  if (!contractReady || !tokenContract) {
-    console.log('⚠️ Contract not ready yet');
-    return res.status(503).json({ 
-      error: 'Contract not ready',
-      message: 'Backend is still initializing, please try again in a moment'
-    });
-  }
-
   const { walletAddress, amount, sessionData } = req.body;
   
   if (!walletAddress || !amount || !sessionData) {
-    return res.status(400).json({ 
-      error: 'Missing required fields'
-    });
+    return res.status(400).json({ error: 'Missing required fields' });
   }
   
   if (!sessionData.eyesClosed || !sessionData.spineCorrect) {
@@ -59,6 +46,7 @@ app.post('/api/mint-monk', async (req, res) => {
     });
   }
   
+  // Rate limiting
   const now = Date.now();
   const userHistory = mintHistory.get(walletAddress) || [];
   const recentMints = userHistory.filter(time => now - time < 3600000);
@@ -73,51 +61,66 @@ app.post('/api/mint-monk', async (req, res) => {
   try {
     console.log(`\n🔄 Minting ${amount} $MONK to ${walletAddress}...`);
     
-    const tx = await tokenContract.erc20.mintTo(walletAddress, amount);
+    // Try mintTo first
+    let tx;
+    try {
+      tx = await contract.mintTo(walletAddress, amount);
+    } catch (e) {
+      // If mintTo fails, try mint
+      console.log('mintTo failed, trying mint...');
+      tx = await contract.mint(walletAddress, amount);
+    }
+    
+    console.log('⏳ Waiting for confirmation...');
+    const receipt = await tx.wait();
     
     recentMints.push(now);
     mintHistory.set(walletAddress, recentMints);
     
     console.log(`✅ Success! Minted ${amount} $MONK`);
-    console.log(`📜 Transaction: ${tx.receipt.transactionHash}`);
-    console.log(`🔗 https://polygonscan.com/tx/${tx.receipt.transactionHash}\n`);
+    console.log(`📜 Transaction: ${receipt.hash}`);
+    console.log(`🔗 https://polygonscan.com/tx/${receipt.hash}\n`);
     
     res.json({
       success: true,
-      transactionHash: tx.receipt.transactionHash,
+      transactionHash: receipt.hash,
       amount: amount,
-      explorerUrl: `https://polygonscan.com/tx/${tx.receipt.transactionHash}`,
+      explorerUrl: `https://polygonscan.com/tx/${receipt.hash}`,
       message: `Successfully minted ${amount} $MONK tokens!`
     });
     
   } catch (error) {
     console.error('❌ Mint error:', error.message);
-    console.error('Full error:', error);
+    
+    // Better error messages
+    let errorMsg = error.message;
+    if (error.message.includes('insufficient funds')) {
+      errorMsg = 'Backend wallet needs more MATIC for gas';
+    } else if (error.message.includes('execution reverted')) {
+      errorMsg = 'Contract rejected transaction - check permissions';
+    }
+    
     res.status(500).json({ 
-      error: 'Server error during minting',
-      message: error.message
+      error: 'Minting failed',
+      message: errorMsg
     });
   }
 });
 
 app.get('/api/balance/:walletAddress', async (req, res) => {
-  if (!contractReady || !tokenContract) {
-    return res.status(503).json({ 
-      error: 'Contract not ready'
-    });
-  }
-
   const { walletAddress } = req.params;
   
   try {
-    const balance = await tokenContract.erc20.balanceOf(walletAddress);
+    const balance = await contract.balanceOf(walletAddress);
+    const decimals = await contract.decimals();
+    const formatted = ethers.formatUnits(balance, decimals);
     
-    console.log(`💰 Balance: ${walletAddress} has ${balance.displayValue} $MONK`);
+    console.log(`💰 Balance: ${walletAddress} has ${formatted} $MONK`);
     
     res.json({
       walletAddress,
-      balance: balance.displayValue,
-      formatted: `${balance.displayValue} $MONK`
+      balance: formatted,
+      formatted: `${formatted} $MONK`
     });
     
   } catch (error) {
@@ -134,17 +137,18 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     contract: process.env.TOKEN_CONTRACT_ADDRESS,
     network: 'polygon',
-    contractReady: contractReady
+    backendWallet: wallet.address
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('\n' + '='.repeat(60));
-  console.log('🚀 MMGA BACKEND RUNNING!');
+  console.log('🚀 MMGA BACKEND RUNNING (ETHERS.JS)');
   console.log('='.repeat(60));
   console.log(`📡 Port: ${PORT}`);
   console.log(`⛓️  Network: Polygon`);
   console.log(`💰 Contract: ${process.env.TOKEN_CONTRACT_ADDRESS}`);
-  console.log(`✅ Server ready!\n`);
+  console.log(`🔑 Wallet: ${wallet.address}`);
+  console.log(`✅ Ready to mint!\n`);
 });
