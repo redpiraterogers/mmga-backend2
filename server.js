@@ -60,12 +60,16 @@ app.post('/api/mint-monk', async (req, res) => {
   try {
     console.log(`\n🔄 Minting ${amount} $MONK to ${walletAddress}...`);
     
+    // FIXED: Convert amount to proper decimals (18 decimals for ERC20)
+    const amountWithDecimals = ethers.parseUnits(amount.toString(), 18);
+    console.log(`   Raw amount: ${amountWithDecimals.toString()}`);
+    
     let tx;
     try {
-      tx = await contract.mintTo(walletAddress, amount);
+      tx = await contract.mintTo(walletAddress, amountWithDecimals);
     } catch (e) {
       console.log('mintTo failed, trying mint...');
-      tx = await contract.mint(walletAddress, amount);
+      tx = await contract.mint(walletAddress, amountWithDecimals);
     }
     
     console.log('⏳ Waiting for confirmation...');
@@ -140,11 +144,11 @@ app.get('/api/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('\n' + '='.repeat(60));
-  console.log('🚀 MMGA BACKEND RUNNING (ALCHEMY RPC)');
+  console.log('🚀 MMGA BACKEND RUNNING (ALCHEMY RPC + FIXED DECIMALS)');
   console.log('='.repeat(60));
   console.log(`📡 Port: ${PORT}`);
   console.log(`⛓️  Network: Polygon`);
   console.log(`💰 Contract: ${process.env.TOKEN_CONTRACT_ADDRESS}`);
   console.log(`🔑 Wallet: ${wallet.address}`);
-  console.log(`✅ Ready to mint!\n`);
+  console.log(`✅ Ready to mint with proper decimals!\n`);
 });
