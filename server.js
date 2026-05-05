@@ -9,32 +9,41 @@ app.use(express.json());
 
 console.log('🔑 Initializing SDK with private key...');
 
-// CRITICAL: Use fromPrivateKey to enable transaction signing
 const sdk = ThirdwebSDK.fromPrivateKey(
   process.env.BACKEND_PRIVATE_KEY,
   'polygon'
 );
 
 let tokenContract;
+let contractReady = false;
 
 async function initContract() {
   try {
+    console.log('🔄 Loading contract:', process.env.TOKEN_CONTRACT_ADDRESS);
     tokenContract = await sdk.getContract(process.env.TOKEN_CONTRACT_ADDRESS);
-    console.log('✅ Connected to contract:', process.env.TOKEN_CONTRACT_ADDRESS);
+    contractReady = true;
+    console.log('✅ Contract ready:', process.env.TOKEN_CONTRACT_ADDRESS);
   } catch (error) {
     console.error('❌ Failed to load contract:', error.message);
-    process.exit(1);
+    console.error('Full error:', error);
   }
 }
 
 initContract();
 
-// Rate limiting
 const mintHistory = new Map();
 const MAX_MINTS_PER_HOUR = 60;
 
-// 🎯 MINT $MONK TOKENS
 app.post('/api/mint-monk', async (req, res) => {
+  // Check if contract is ready
+  if (!contractReady || !tokenContract) {
+    console.log('⚠️ Contract not ready yet');
+    return res.status(503).json({ 
+      error: 'Contract not ready',
+      message: 'Backend is still initializing, please try again in a moment'
+    });
+  }
+
   const { walletAddress, amount, sessionData } = req.body;
   
   if (!walletAddress || !amount || !sessionData) {
@@ -50,7 +59,6 @@ app.post('/api/mint-monk', async (req, res) => {
     });
   }
   
-  // Rate limiting
   const now = Date.now();
   const userHistory = mintHistory.get(walletAddress) || [];
   const recentMints = userHistory.filter(time => now - time < 3600000);
@@ -84,6 +92,7 @@ app.post('/api/mint-monk', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Mint error:', error.message);
+    console.error('Full error:', error);
     res.status(500).json({ 
       error: 'Server error during minting',
       message: error.message
@@ -91,8 +100,13 @@ app.post('/api/mint-monk', async (req, res) => {
   }
 });
 
-// 💰 GET USER'S $MONK BALANCE
 app.get('/api/balance/:walletAddress', async (req, res) => {
+  if (!contractReady || !tokenContract) {
+    return res.status(503).json({ 
+      error: 'Contract not ready'
+    });
+  }
+
   const { walletAddress } = req.params;
   
   try {
@@ -115,16 +129,15 @@ app.get('/api/balance/:walletAddress', async (req, res) => {
   }
 });
 
-// ❤️ HEALTH CHECK
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
     contract: process.env.TOKEN_CONTRACT_ADDRESS,
-    network: 'polygon'
+    network: 'polygon',
+    contractReady: contractReady
   });
 });
 
-// 🚀 START SERVER
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('\n' + '='.repeat(60));
@@ -133,5 +146,5 @@ app.listen(PORT, () => {
   console.log(`📡 Port: ${PORT}`);
   console.log(`⛓️  Network: Polygon`);
   console.log(`💰 Contract: ${process.env.TOKEN_CONTRACT_ADDRESS}`);
-  console.log(`✅ Ready to mint!\n`);
+  console.log(`✅ Server ready!\n`);
 });
