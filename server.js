@@ -7,32 +7,66 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Polygon RPC
-const provider = new ethers.JsonRpcProvider('https://polygon-rpc.com');
-
-// Your backend wallet
-const wallet = new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider);
-
-console.log('🔑 Backend wallet:', wallet.address);
-
-// Simple ERC20 mint ABI
-const contractABI = [
-  "function mint(address to, uint256 amount) public",
-  "function mintTo(address to, uint256 amount) public",
-  "function balanceOf(address account) public view returns (uint256)",
-  "function decimals() public view returns (uint8)"
+// Try multiple Polygon RPCs (free public endpoints)
+const RPC_URLS = [
+  'https://polygon-rpc.com',
+  'https://rpc-mainnet.maticvigil.com',
+  'https://rpc-mainnet.matic.network',
+  'https://matic-mainnet.chainstacklabs.com',
+  'https://polygon-mainnet.public.blastapi.io'
 ];
 
-const contract = new ethers.Contract(
-  process.env.TOKEN_CONTRACT_ADDRESS,
-  contractABI,
-  wallet
-);
+let provider;
+let wallet;
+let contract;
+
+async function initProvider() {
+  for (const rpcUrl of RPC_URLS) {
+    try {
+      console.log(`🔄 Trying RPC: ${rpcUrl}`);
+      const testProvider = new ethers.JsonRpcProvider(rpcUrl);
+      await testProvider.getNetwork(); // Test connection
+      provider = testProvider;
+      console.log(`✅ Connected to: ${rpcUrl}`);
+      break;
+    } catch (e) {
+      console.log(`❌ Failed: ${rpcUrl}`);
+    }
+  }
+  
+  if (!provider) {
+    console.error('❌ All RPC endpoints failed!');
+    process.exit(1);
+  }
+  
+  // Initialize wallet and contract
+  wallet = new ethers.Wallet(process.env.BACKEND_PRIVATE_KEY, provider);
+  console.log('🔑 Backend wallet:', wallet.address);
+  
+  const contractABI = [
+    "function mint(address to, uint256 amount) public",
+    "function mintTo(address to, uint256 amount) public",
+    "function balanceOf(address account) public view returns (uint256)",
+    "function decimals() public view returns (uint8)"
+  ];
+  
+  contract = new ethers.Contract(
+    process.env.TOKEN_CONTRACT_ADDRESS,
+    contractABI,
+    wallet
+  );
+}
+
+initProvider();
 
 const mintHistory = new Map();
 const MAX_MINTS_PER_HOUR = 60;
 
 app.post('/api/mint-monk', async (req, res) => {
+  if (!contract) {
+    return res.status(503).json({ error: 'Backend initializing, try again in a moment' });
+  }
+
   const { walletAddress, amount, sessionData } = req.body;
   
   if (!walletAddress || !amount || !sessionData) {
@@ -46,7 +80,6 @@ app.post('/api/mint-monk', async (req, res) => {
     });
   }
   
-  // Rate limiting
   const now = Date.now();
   const userHistory = mintHistory.get(walletAddress) || [];
   const recentMints = userHistory.filter(time => now - time < 3600000);
@@ -61,12 +94,10 @@ app.post('/api/mint-monk', async (req, res) => {
   try {
     console.log(`\n🔄 Minting ${amount} $MONK to ${walletAddress}...`);
     
-    // Try mintTo first
     let tx;
     try {
       tx = await contract.mintTo(walletAddress, amount);
     } catch (e) {
-      // If mintTo fails, try mint
       console.log('mintTo failed, trying mint...');
       tx = await contract.mint(walletAddress, amount);
     }
@@ -92,7 +123,6 @@ app.post('/api/mint-monk', async (req, res) => {
   } catch (error) {
     console.error('❌ Mint error:', error.message);
     
-    // Better error messages
     let errorMsg = error.message;
     if (error.message.includes('insufficient funds')) {
       errorMsg = 'Backend wallet needs more MATIC for gas';
@@ -108,6 +138,10 @@ app.post('/api/mint-monk', async (req, res) => {
 });
 
 app.get('/api/balance/:walletAddress', async (req, res) => {
+  if (!contract) {
+    return res.status(503).json({ error: 'Backend initializing' });
+  }
+
   const { walletAddress } = req.params;
   
   try {
@@ -137,7 +171,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     contract: process.env.TOKEN_CONTRACT_ADDRESS,
     network: 'polygon',
-    backendWallet: wallet.address
+    backendWallet: wallet ? wallet.address : 'initializing'
   });
 });
 
@@ -149,6 +183,5 @@ app.listen(PORT, () => {
   console.log(`📡 Port: ${PORT}`);
   console.log(`⛓️  Network: Polygon`);
   console.log(`💰 Contract: ${process.env.TOKEN_CONTRACT_ADDRESS}`);
-  console.log(`🔑 Wallet: ${wallet.address}`);
-  console.log(`✅ Ready to mint!\n`);
+  console.log(`✅ Server started!\n`);
 });
